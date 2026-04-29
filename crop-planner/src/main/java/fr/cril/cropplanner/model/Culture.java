@@ -1,0 +1,45 @@
+package fr.cril.cropplanner.model;
+
+/**
+ * Culture maraîchère — objet du domaine central.
+ * Chaque culture est identifiée par un ID entier (0 = repos/jachère).
+ */
+public record Culture(
+    int id,
+    String nom,
+    String nomLocal,           // nom wolof
+    FamilleBotanique famille,
+    TypeLegume type,
+    int cycleMinJours,
+    int cycleMaxJours,
+    double besoinEauMin,       // L/m²/jour
+    double besoinEauMax,
+    String espacement
+) {
+    /** Repos / jachère (ID = 0). */
+    public static final Culture REPOS = new Culture(
+        0, "Repos", "—", null, null, 0, 0, 0, 0, "—"
+    );
+
+    /** Besoin en eau moyen (L/m²/jour). */
+    public double besoinEauMoyen() {
+        return (besoinEauMin + besoinEauMax) / 2.0;
+    }
+
+    /** Durée moyenne du cycle en jours. */
+    public int cycleMoyenJours() {
+        return (cycleMinJours + cycleMaxJours) / 2;
+    }
+
+    /** Durée du cycle en semaines (arrondi sup). */
+    public int cycleSemaines() {
+        return (int) Math.ceil(cycleMoyenJours() / 7.0);
+    }
+
+    public boolean isRepos() { return id == 0; }
+
+    @Override
+    public String toString() {
+        return nom + " [" + (famille != null ? famille.nom() : "—") + "]";
+    }
+}

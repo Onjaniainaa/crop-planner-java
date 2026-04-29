@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>fr.cril</groupId>
+    <artifactId>crop-planner</artifactId>
+    <version>1.0-SNAPSHOT</version>
+    <packaging>jar</packaging>
+
+    <name>CropPlanner Thiès</name>
+    <description>
+        Planification spatio-temporelle de cultures maraîchères
+        pour le foyer Bio Jêmm — Thiès, Sénégal.
+        Approches CP (Choco), MaxSAT (SAT4J), CP-SAT (OR-Tools).
+    </description>
+
+    <properties>
+        <maven.compiler.source>17</maven.compiler.source>
+        <maven.compiler.target>17</maven.compiler.target>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    </properties>
+
+    <dependencies>
+        <!-- Choco Solver (CP) -->
+        <dependency>
+            <groupId>org.choco-solver</groupId>
+            <artifactId>choco-solver</artifactId>
+            <version>4.10.14</version>
+        </dependency>
+
+        <!-- SAT4J (MaxSAT) -->
+        <dependency>
+            <groupId>org.ow2.sat4j</groupId>
+            <artifactId>org.ow2.sat4j.maxsat</artifactId>
+            <version>2.3.6</version>
+        </dependency>
+
+        <!-- Apache POI (lecture Excel) -->
+        <dependency>
+            <groupId>org.apache.poi</groupId>
+            <artifactId>poi-ooxml</artifactId>
+            <version>5.2.5</version>
+        </dependency>
+
+        <!-- Gson (export JSON) -->
+        <dependency>
+            <groupId>com.google.code.gson</groupId>
+            <artifactId>gson</artifactId>
+            <version>2.10.1</version>
+        </dependency>
+
+        <!-- JUnit 5 -->
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>5.10.2</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <version>3.3.0</version>
+                <configuration>
+                    <archive>
+                        <manifest>
+                            <mainClass>fr.cril.cropplanner.Main</mainClass>
+                        </manifest>
+                    </archive>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>
