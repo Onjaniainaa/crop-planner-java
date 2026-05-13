@@ -1,5 +1,6 @@
 package fr.cril.cropplanner.export;
 
+import fr.cril.cropplanner.ingestion.AgronomicDatabase;
 import fr.cril.cropplanner.model.*;
 import fr.cril.cropplanner.transformation.GardenTopology;
 import fr.cril.cropplanner.validation.PlanVerifier;

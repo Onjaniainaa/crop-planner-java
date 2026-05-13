@@ -5,21 +5,29 @@ package fr.cril.cropplanner.model;
  * Chaque culture est identifiée par un ID entier (0 = repos/jachère).
  */
 public record Culture(
-    int id,
-    String nom,
-    String nomLocal,           // nom wolof
-    FamilleBotanique famille,
-    TypeLegume type,
-    int cycleMinJours,
-    int cycleMaxJours,
-    double besoinEauMin,       // L/m²/jour
-    double besoinEauMax,
-    String espacement
+        int id,
+        String nom,
+        String nomLocal,           // nom wolof
+        FamilleBotanique famille,
+        TypeLegume type,
+        int cycleMinJours,
+        int cycleMaxJours,
+        double besoinEauMin,       // L/m²/jour
+        double besoinEauMax,
+        String espacement
 ) {
     /** Repos / jachère (ID = 0). */
     public static final Culture REPOS = new Culture(
-        0, "Repos", "—", null, null, 0, 0, 0, 0, "—"
+            0, "Repos", "—", null, null, 0, 0, 0, 0, "—"
     );
+
+    /**
+     * Méthode requise par AgronomicDatabase pour le calcul du cycle de l'eau (C05).
+     * Elle utilise la valeur moyenne pour la planification.
+     */
+    public double besoinEau() {
+        return besoinEauMoyen();
+    }
 
     /** Besoin en eau moyen (L/m²/jour). */
     public double besoinEauMoyen() {

@@ -1,5 +1,6 @@
 package fr.cril.cropplanner.solver.sat;
 
+import fr.cril.cropplanner.ingestion.AgronomicDatabase;
 import fr.cril.cropplanner.model.*;
 import fr.cril.cropplanner.transformation.GardenTopology;
 import org.sat4j.core.VecInt;
