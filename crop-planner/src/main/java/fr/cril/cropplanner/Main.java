@@ -4,6 +4,7 @@ import fr.cril.cropplanner.ingestion.AgronomicDatabase;
 import fr.cril.cropplanner.ingestion.ExcelReader;
 import fr.cril.cropplanner.transformation.GardenTopology;
 import fr.cril.cropplanner.solver.cp.ChocoModel;
+import fr.cril.cropplanner.solver.sat.SAT4JModel; // IMPORT AJOUTÉ
 import fr.cril.cropplanner.validation.PlanVerifier;
 import fr.cril.cropplanner.export.HTMLExporter;
 import fr.cril.cropplanner.model.Culture;
@@ -18,16 +19,14 @@ public class Main {
         System.out.println("║  Pipeline P1→P6 : données → plan optimisé      ║");
         System.out.println("╚══════════════════════════════════════════════════╝\n");
 
-        // Récupération des arguments
         String basePath  = getArg(args, "--base",   "data/base_agronomique_thies.xlsx");
         String consoPath = getArg(args, "--conso",  "data/analyse_consommation_P2_pipeline.xlsx");
-        String solverArg = getArg(args, "--solver", "cp");
-        int timeout = Integer.parseInt(getArg(args, "--time", "300")); // 5 minutes
+        String solverArg = getArg(args, "--solver", "sat"); // PAR DÉFAUT MAINTENANT SUR SAT
+        int timeout = Integer.parseInt(getArg(args, "--time", "300"));
         String outputDir = getArg(args, "--output", "output");
         int nbPeriodes   = 12;
 
         try {
-            // [P1] Ingestion des données
             System.out.println("[P1] Ingestion des données...");
             AgronomicDatabase db = ExcelReader.loadAgronomicDB(basePath);
 
@@ -36,105 +35,106 @@ public class Main {
                 db.setDemande(demande);
                 System.out.println("  ✅ Demande alimentaire chargée.");
             } catch (Exception e) {
-                System.out.println("  ⚠ Fichier consommation non trouvé ou erreur de lecture.");
+                System.out.println("  ⚠ Fichier consommation non trouvé.");
             }
 
-            // [P1.5] Diagnostic
             effectuerDiagnostic(db);
 
-            // [P2] Topologie
             System.out.println("\n[P2] Construction de la topologie...");
             GardenTopology topo = GardenTopology.bioJemm();
             System.out.println("  ✅ Topologie chargée : " + topo.getParcelles().size() + " parcelles.");
 
             PlanVerifier verifier = new PlanVerifier(db, topo, nbPeriodes);
 
-            // Préparation du dossier de sortie
             File dir = new File(outputDir);
             if (!dir.exists() && !dir.mkdirs()) {
-                System.err.println("  ⚠ Attention : Impossible de créer le dossier " + outputDir);
+                System.err.println("  ⚠ Erreur dossier de sortie.");
             }
 
-            // [P3/P4] Résolution
-            if (solverArg.contains("cp")) {
+            // --- CHOIX DU SOLVEUR ---
+            if (solverArg.equalsIgnoreCase("cp")) {
                 runChoco(db, topo, nbPeriodes, timeout, verifier, outputDir);
+            } else if (solverArg.equalsIgnoreCase("sat")) {
+                runSAT(db, topo, nbPeriodes, timeout, verifier, outputDir); // APPEL AJOUTÉ
+            } else {
+                System.out.println("  ⚠ Solveur inconnu, lancement de SAT4J par défaut.");
+                runSAT(db, topo, nbPeriodes, timeout, verifier, outputDir);
             }
 
         } catch (Exception e) {
             System.err.println("❌ Erreur critique : " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+
+    // --- MÉTHODE AJOUTÉE POUR SAT4J ---
+    private static void runSAT(AgronomicDatabase db, GardenTopology topo, int nbPeriodes,
+                               int timeout, PlanVerifier verifier, String outputDir) throws Exception {
+
+        System.out.println("\n[P3] Initialisation SAT4J...");
+        // SAT n'utilise pas de "boucle de relâchement" automatique ici, on le lance en direct
+        SAT4JModel model = new SAT4JModel(db, topo, nbPeriodes);
+
+        System.out.println("[P4] Résolution MaxSAT en cours...");
+        long startTime = System.currentTimeMillis();
+        SAT4JModel.SolveResult result = model.solve(timeout);
+        long duration = System.currentTimeMillis() - startTime;
+
+        if (result.plan() != null) {
+            System.out.println("✅ SOLUTION SAT TROUVÉE en " + (duration / 1000.0) + "s !");
+            PlanVerifier.Report report = verifier.verify(result.plan());
+
+            String fileName = outputDir + "/plan_sat_final.html";
+
+            HTMLExporter.export(
+                    result.plan(),
+                    db,
+                    topo,
+                    nbPeriodes,
+                    report,
+                    "SAT4J MaxSAT (Résultat)",
+                    result.timeMs(),
+                    fileName
+            );
+            System.out.println("  👉 Plan exporté : " + fileName);
+        } else {
+            System.err.println("❌ UNSAT : Le solveur SAT n'a trouvé aucune solution possible.");
         }
     }
 
     private static void effectuerDiagnostic(AgronomicDatabase db) {
         System.out.println("\n🔍 DIAGNOSTIC DES DONNÉES :");
         boolean alerte = false;
-        int conflits = 0;
-
         for (Culture c : db.getAllCultures()) {
             if (c.isRepos()) continue;
             for (int m = 0; m < 12; m++) {
                 if (db.getDemande(c.id(), m) > 0 && !db.isDisponible(c.id(), m)) {
-                    System.err.println("  ❌ CONFLIT : '" + c.nom() + "' demandée au mois " + (m + 1) + " mais interdite au calendrier.");
+                    System.err.println("  ❌ CONFLIT : '" + c.nom() + "' demandée au mois " + (m + 1) + " mais interdite.");
                     alerte = true;
-                    conflits++;
                 }
             }
         }
         if (!alerte) System.out.println("  ✅ Cohérence Demande/Calendrier : OK.");
-        else System.out.println("  ⚠ Total de " + conflits + " conflits détectés.");
     }
 
     private static void runChoco(AgronomicDatabase db, GardenTopology topo, int nbPeriodes,
                                  int timeout, PlanVerifier verifier, String outputDir) throws Exception {
-
         boolean solutionTrouvee = false;
         int tentative = 0;
-        int maxTentatives = 5;
-
-        while (!solutionTrouvee && tentative < maxTentatives) {
-            // Logique de relâchement : on commence à 0.6 (60% de la demande)
-            // et on descend de 10% à chaque échec.
+        while (!solutionTrouvee && tentative < 5) {
             double facteurDemande = 0.6 - (tentative * 0.1);
-            if (facteurDemande < 0.1) facteurDemande = 0.1;
-
-            System.out.println("\n[P3] Tentative #" + (tentative + 1));
-            System.out.println("     📊 Facteur de demande ciblé : " + String.format("%.0f%%", facteurDemande * 100));
-
             ChocoModel model = new ChocoModel(db, topo, nbPeriodes, facteurDemande);
-            System.out.println("[P4] Résolution CP en cours...");
-
-            long startTime = System.currentTimeMillis();
             ChocoModel.SolveResult result = model.solve(timeout);
-            long duration = System.currentTimeMillis() - startTime;
 
             if (result.plan() != null) {
-                System.out.println("✅ SOLUTION TROUVÉE en " + (duration / 1000.0) + "s !");
+                System.out.println("✅ SOLUTION CP TROUVÉE !");
                 PlanVerifier.Report report = verifier.verify(result.plan());
-
-                String fileName = outputDir + "/plan_cp_t" + (tentative + 1) + ".html";
-
-                // --- CORRECTION APPLIQUÉE ICI ---
-                HTMLExporter.export(
-                        result.plan(),
-                        db,
-                        topo,
-                        nbPeriodes,
-                        report,
-                        "Choco-CP (Tentative " + (tentative + 1) + ")",
-                        (long) result.timeMs(), // Cast explicite en long
-                        fileName
-                );
-
-                System.out.println("  👉 Plan exporté : " + fileName);
+                HTMLExporter.export(result.plan(), db, topo, nbPeriodes, report, "Choco-CP", (long)result.timeMs(), outputDir + "/plan_cp_t" + (tentative+1) + ".html");
                 solutionTrouvee = true;
             } else {
-                System.out.println("❌ UNSAT (Aucune solution possible).");
+                System.out.println("❌ UNSAT à " + (int)(facteurDemande*100) + "%");
                 tentative++;
             }
-        }
-
-        if (!solutionTrouvee) {
-            System.err.println("\nAbandon : Aucune solution après " + maxTentatives + " essais.");
         }
     }
 
