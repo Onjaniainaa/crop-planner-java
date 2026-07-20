@@ -87,7 +87,7 @@ public class ExcelReader {
                 String fKey = familleStr.split("\\(")[0].trim().toLowerCase();
                 for (FamilleBotanique f : db.getAllFamilles()) {
                     if (f.nom().toLowerCase().startsWith(fKey)
-                        || fKey.startsWith(f.nom().toLowerCase().substring(0,
+                            || fKey.startsWith(f.nom().toLowerCase().substring(0,
                             Math.min(6, f.nom().length())))) {
                         famille = f;
                         break;
@@ -105,21 +105,34 @@ public class ExcelReader {
             double[] eau = parseRangeDouble(eauStr);
 
             Culture c = new Culture(id++, nom,
-                nomLocal != null ? nomLocal : "—",
-                famille, type,
-                cycle[0], cycle[1],
-                eau[0], eau[1],
-                espacement != null ? espacement : "—"
+                    nomLocal != null ? nomLocal : "—",
+                    famille, type,
+                    cycle[0], cycle[1],
+                    eau[0], eau[1],
+                    espacement != null ? espacement : "—"
             );
             db.addCulture(c);
+
+            // C03 — Calendrier saisonnalité depuis colonne 6 "Hivernage (Juil-Sept)"
+            // Cultures marquées "Non", "Difficile" ou "Monte" sont interdites Jul/Aoû/Sep
+            String hivernage = str(row, 6);
+            boolean okHivernage = (hivernage == null)
+                    || (!hivernage.toLowerCase().contains("non")
+                    && !hivernage.toLowerCase().contains("difficile")
+                    && !hivernage.toLowerCase().contains("monte"));
+            for (int m = 0; m < 12; m++) {
+                boolean moisHiv = (m == 6 || m == 7 || m == 8);
+                StatutMois statut = (!okHivernage && moisHiv)
+                        ? StatutMois.IMPOSSIBLE : StatutMois.SEMIS;
+                db.setCalendrier(c.id(), m, statut);
+            }
         }
     }
 
-    // ── Associations ──
+    //  Associations
     private static void loadAssociations(Sheet ws, AgronomicDatabase db) {
         if (ws == null) return;
 
-        // Lire noms en colonne (row 2, colonnes B+)
         Row headerRow = ws.getRow(2);
         if (headerRow == null) return;
 
@@ -140,6 +153,8 @@ public class ExcelReader {
                 String c2 = colNames.get(c);
                 if (c2 == null) continue;
                 String val = str(row, c);
+                if (val != null) val = val.trim()
+                        .replace('−', '-').replace('–', '-').replace('—', '-');
                 TypeAssociation assoc = TypeAssociation.fromSymbol(val);
                 if (assoc != TypeAssociation.NEUTRE) {
                     db.setCompatibilite(c1, c2, assoc);
@@ -148,7 +163,7 @@ public class ExcelReader {
         }
     }
 
-    // ── Demande ──
+    // DEMANDE
     private static int[][] loadDemandeSheet(Sheet ws, AgronomicDatabase db) {
         int nbCultures = db.getNbCultures();
         int[][] demande = new int[nbCultures][12];
@@ -159,13 +174,12 @@ public class ExcelReader {
             String name = str(row, 1);
             if (name == null || name.isEmpty()) continue;
 
-            // Trouver l'ID de la culture
+
             Culture c = db.getCultureByName(name);
             if (c == null) {
-                // Essai avec correspondance partielle
                 for (Culture cx : db.getAllCultures()) {
                     if (cx.nom().toLowerCase().contains(name.toLowerCase().substring(0,
-                        Math.min(4, name.length())))) {
+                            Math.min(4, name.length())))) {
                         c = cx;
                         break;
                     }
@@ -217,8 +231,8 @@ public class ExcelReader {
             if (s.contains("-")) {
                 String[] parts = s.split("-");
                 return new int[]{
-                    Integer.parseInt(parts[0].trim()),
-                    Integer.parseInt(parts[1].trim())
+                        Integer.parseInt(parts[0].trim()),
+                        Integer.parseInt(parts[1].trim())
                 };
             }
             int v = Integer.parseInt(s.replaceAll("[^0-9]", "").trim());
@@ -234,8 +248,8 @@ public class ExcelReader {
             if (s.contains("-")) {
                 String[] parts = s.split("-");
                 return new double[]{
-                    Double.parseDouble(parts[0].trim()),
-                    Double.parseDouble(parts[1].trim())
+                        Double.parseDouble(parts[0].trim()),
+                        Double.parseDouble(parts[1].trim())
                 };
             }
             double v = Double.parseDouble(s.replaceAll("[^0-9.]", "").trim());

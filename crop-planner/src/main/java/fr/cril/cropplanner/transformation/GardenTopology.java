@@ -3,11 +3,7 @@ package fr.cril.cropplanner.transformation;
 import fr.cril.cropplanner.model.Parcelle;
 import java.util.*;
 
-/**
- * Topologie du potager en carrés.
- * Modélise la grille comme un graphe non orienté G = (V, E)
- * avec voisinage 4-connexe (haut, bas, gauche, droite).
- */
+
 public class GardenTopology {
 
     private final int nbReseaux;
@@ -31,15 +27,11 @@ public class GardenTopology {
         return new GardenTopology(3, 2, 12);
     }
 
-    /**
-     * AJOUT : Retourne la liste des parcelles sous forme d'objets Parcelle.
-     * C'est cette méthode que le Main et le Verifier appellent.
-     */
+
     public List<Parcelle> getParcelles() {
         List<Parcelle> liste = new ArrayList<>();
         for (int i = 0; i < totalCarres; i++) {
             if (disponible[i]) {
-                // On crée un objet Parcelle(id, nom, surface)
                 // On considère ici que chaque carré fait 1.0 m² par défaut
                 liste.add(new Parcelle(i, nomCarre(i), 1.0));
             }
@@ -49,8 +41,6 @@ public class GardenTopology {
 
     public void setIndisponible(int carre) {
         disponible[carre] = false;
-        // Note: Si tu marques un carré indisponible après la construction,
-        // il faudrait idéalement reconstruire 'edges', mais ici on le fait au début.
     }
 
     public int toIndex(int reseau, int rangee, int position) {

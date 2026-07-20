@@ -7,10 +7,7 @@ import fr.cril.cropplanner.transformation.GardenTopology;
 import java.util.*;
 
 /**
- * Vérificateur de plan de culture.
- * Contrôle indépendant (double implémentation) des solutions
- * produites par les solveurs CP et SAT.
- *
+
  * Vérifie 4 règles :
  *   R1 — Rotation des familles botaniques
  *   R2 — Incompatibilité d'adjacence
@@ -29,10 +26,6 @@ public class PlanVerifier {
         this.H = nbPeriodes;
     }
 
-    /**
-     * Vérifie un plan complet et retourne un rapport.
-     * @param plan plan[carré][période] = cultureId
-     */
     public Report verify(int[][] plan) {
         Report report = new Report();
 
@@ -135,7 +128,7 @@ public class PlanVerifier {
             (double) satisfied / total * 100 : 100);
     }
 
-    /** R4 — Associations favorables (info). */
+    /** R4 — Associations favorables  */
     private void countAssociations(int[][] plan, Report report) {
         int favorable = 0, total = 0;
 

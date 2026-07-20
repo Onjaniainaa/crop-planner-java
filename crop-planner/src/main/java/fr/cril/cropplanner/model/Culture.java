@@ -1,9 +1,6 @@
 package fr.cril.cropplanner.model;
 
-/**
- * Culture maraîchère — objet du domaine central.
- * Chaque culture est identifiée par un ID entier (0 = repos/jachère).
- */
+
 public record Culture(
         int id,
         String nom,
@@ -16,7 +13,7 @@ public record Culture(
         double besoinEauMax,
         String espacement
 ) {
-    /** Repos / jachère (ID = 0). */
+
     public static final Culture REPOS = new Culture(
             0, "Repos", "—", null, null, 0, 0, 0, 0, "—"
     );

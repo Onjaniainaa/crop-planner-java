@@ -5,6 +5,8 @@ public enum StatutMois {
     SEMIS, CROISSANCE, RECOLTE, DIFFICILE, IMPOSSIBLE;
 
     public boolean isPossible() {
-        return this != IMPOSSIBLE;
+        // Seuls les mois de SEMIS, CROISSANCE, ou RECOLTE sont considérés comme valides.
+        // DIFFICILE et IMPOSSIBLE renvoient false et bloquent le solveur.
+        return this != IMPOSSIBLE && this != DIFFICILE;
     }
 }

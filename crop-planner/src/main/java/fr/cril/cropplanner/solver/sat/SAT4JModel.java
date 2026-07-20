@@ -3,19 +3,21 @@ package fr.cril.cropplanner.solver.sat;
 import fr.cril.cropplanner.ingestion.AgronomicDatabase;
 import fr.cril.cropplanner.model.*;
 import fr.cril.cropplanner.transformation.GardenTopology;
+import org.sat4j.core.Vec;
 import org.sat4j.core.VecInt;
 import org.sat4j.maxsat.WeightedMaxSatDecorator;
 import org.sat4j.maxsat.SolverFactory;
+import org.sat4j.pb.IPBSolver;
 import org.sat4j.specs.ContradictionException;
+import org.sat4j.specs.IVec;
+import org.sat4j.specs.IVecInt;
 import org.sat4j.specs.TimeoutException;
+
+import java.math.BigInteger;
 
 import java.util.*;
 
-/**
- * Modèle MaxSAT complet pour le projet CropPlanner.
- * Intègre les contraintes dures (Cycles, Rotations, Saisonnalité, Eau)
- * et les contraintes souples (Demande alimentaire, Associations).
- */
+
 public class SAT4JModel {
 
     private final int N;     // Nombre de parcelles
@@ -38,6 +40,7 @@ public class SAT4JModel {
         this.nextAuxVar = nbVars + 1;
     }
 
+    /** Index unique DIMACS pour la variable x_{i,t,c} */
     private int var(int i, int t, int c) {
         return i * H * (M + 1) + t * (M + 1) + c + 1;
     }
@@ -45,8 +48,7 @@ public class SAT4JModel {
     public SolveResult solve(int timeoutSec) {
         try {
             solver = new WeightedMaxSatDecorator(SolverFactory.newDefault());
-            // Réservation d'espace pour les variables primaires et auxiliaires
-            solver.newVar(nbVars + (N * H * M) + 1000);
+            solver.newVar(nbVars + (N * H * M * 4));
             solver.setTimeout(timeoutSec);
 
             long start = System.currentTimeMillis();
@@ -81,58 +83,107 @@ public class SAT4JModel {
     }
 
     private void encode() throws ContradictionException {
-        // --- 1. Occupation des parcelles (ALO + AMO) ---
+        // --- 1. ALO + AMO (Une seule culture par parcelle/mois - DUR) ---
         for (int i = 0; i < N; i++) {
             if (!topo.isDisponible(i)) {
-                for(int t=0; t<H; t++) addHardUnit(var(i, t, 0));
+                for (int t = 0; t < H; t++) addHardUnit(var(i, t, 0));
                 continue;
             }
             for (int t = 0; t < H; t++) encodeExactlyOne(i, t);
         }
 
-        // --- 2. C03 : Saisonnalité ---
-        for (int i = 0; i < N; i++) {
-            if (!topo.isDisponible(i)) continue;
-            for (int t = 0; t < H; t++) {
-                int[] available = db.getCulturesDisponibles(t);
-                Set<Integer> avSet = new HashSet<>();
-                for (int a : available) avSet.add(a);
-                for (int c = 1; c <= M; c++) {
-                    if (!avSet.contains(c)) addHardUnit(-var(i, t, c));
-                }
-            }
-        }
+        // --- 2 & 3. C03 & C05 : Saisonnalité STRICTE NON-DÉBORDANTE (DUR) ---
+        for (Culture cult : db.getAllCultures()) {
+            if (cult.id() <= 0 || cult.isRepos()) continue;
 
-        // --- 3. C05 : Durée des cycles (Maintien au sol) ---
-        for (int i = 0; i < N; i++) {
+            // Calcul de la durée exacte en mois de la culture (ex: 60 jours -> 2 mois)
+            int dureeMois = (int) Math.ceil(cult.cycleMoyenJours() / 30.0);
+            if (dureeMois <= 0) dureeMois = 1;
+
             for (int t = 0; t < H; t++) {
-                for (Culture cult : db.getAllCultures()) {
-                    if (cult.isRepos()) continue;
-                    int dMois = (int) Math.ceil(cult.cycleMoyenJours() / 30.0);
-                    for (int d = 1; d < dMois && (t + d) < H; d++) {
-                        addHardBinary(-var(i, t, cult.id()), var(i, t + d, cult.id()));
+                boolean conflitHivernage = false;
+
+                // On vérifie si un seul des mois du cycle complet de croissance touche à une interdiction
+                for (int d = 0; d < dureeMois; d++) {
+                    int moisPresence = (t + d) % H;
+                    if (!db.isDisponible(cult.id(), moisPresence)) {
+                        conflitHivernage = true;
+                        break;
+                    }
+                }
+
+                if (conflitHivernage) {
+                    for (int i = 0; i < N; i++) {
+                        solver.addHardClause(new VecInt(new int[]{ -var(i, t, cult.id()) }));
                     }
                 }
             }
         }
 
-        // --- 4. C01 : Rotation (Familles Botaniques) ---
-        Map<String, List<Integer>> familyMap = db.getCulturesByFamille();
-        for (var entry : familyMap.entrySet()) {
+        // Règle A : Interdiction absolue de faire 2 mois de repos (0) consécutifs (DUR)
+        for (int i = 0; i < N; i++) {
+            if (!topo.isDisponible(i)) continue;
+            for (int t = 0; t < H - 1; t++) {
+                addHardBinary(-var(i, t, 0), -var(i, t + 1, 0));
+            }
+        }
+
+        // Règle B : Logique de Maintien au Sol / Cycle Strict (DUR)
+        for (int i = 0; i < N; i++) {
+            if (!topo.isDisponible(i)) continue;
+            for (int t = 0; t < H; t++) {
+                for (Culture cult : db.getAllCultures()) {
+                    if (cult.isRepos()) continue;
+                    int c = cult.id();
+                    int dMois = (int) Math.ceil(cult.cycleMoyenJours() / 30.0);
+                    if (dMois <= 0) dMois = 1;
+
+                    for (int d = 1; d < dMois && (t + d) < H; d++) {
+                        if (t == 0) {
+                            addHardBinary(-var(i, t, c), var(i, t + d, c));
+                        } else {
+                            solver.addHardClause(new VecInt(new int[]{var(i, t - 1, c), -var(i, t, c), var(i, t + d, c)}));
+                        }
+                    }
+
+                    if (t + dMois < H) {
+                        if (t == 0) {
+                            addHardBinary(-var(i, t, c), -var(i, t + dMois, c));
+                        } else {
+                            solver.addHardClause(new VecInt(new int[]{var(i, t - 1, c), -var(i, t, c), -var(i, t + dMois, c)}));
+                        }
+                    }
+                }
+            }
+        }
+
+        for (Map.Entry<String, List<Integer>> entry : db.getCulturesByFamille().entrySet()) {
             List<Integer> cids = entry.getValue();
+
             FamilleBotanique fam = db.getAllFamilles().stream()
-                    .filter(f -> f.id().equals(entry.getKey())).findFirst().orElse(null);
+                    .filter(f -> f.id().equals(entry.getKey()))
+                    .findFirst().orElse(null);
             if (fam == null) continue;
 
-            int retour = fam.retourMinPeriodes();
+            int retourMin = fam.retourMinPeriodes();
+            if (retourMin <= 0) continue;
+
             for (int i = 0; i < N; i++) {
+                if (!topo.isDisponible(i)) continue;
+
                 for (int t = 0; t < H; t++) {
-                    for (int k = 1; k < Math.min(retour, H - t); k++) {
-                        for (int c1 : cids) {
+                    for (int c1 : cids) {
+                        // D = durée du cycle de c1 en mois (≥ 1)
+                        int D = Math.max(1, (int) Math.ceil(
+                                db.getCultureById(c1).cycleMoyenJours() / 30.0));
+
+                        // Fenêtre : [t+D .. t+D+retourMin-1]  (modulo H)
+                        for (int k = 0; k < retourMin; k++) {
+                            int tExclu = (t + D + k) % H;
+                            if (tExclu >= t && tExclu < t + D) continue;
+
                             for (int c2 : cids) {
-                                int dureeC1 = (int) Math.ceil(db.getCultureById(c1).cycleMoyenJours() / 30.0);
-                                if (c1 == c2 && k < dureeC1) continue;
-                                addHardBinary(-var(i, t, c1), -var(i, t + k, c2));
+                                addHardBinary(-var(i, t, c1), -var(i, tExclu, c2));
                             }
                         }
                     }
@@ -140,72 +191,214 @@ public class SAT4JModel {
             }
         }
 
-        // --- 5. C02 : Incompatibilité d'adjacence ---
-        List<int[]> forbidden = db.getForbiddenPairs();
+        // --- 5. C02 : Incompatibilité d'adjacence (Voisins interdits - DUR) ---
+        List<Culture> allCults = db.getAllCultures();
         for (int t = 0; t < H; t++) {
             for (int[] edge : topo.getEdges()) {
-                for (int[] pair : forbidden) {
-                    addHardBinary(-var(edge[0], t, pair[0]), -var(edge[1], t, pair[1]));
-                    addHardBinary(-var(edge[0], t, pair[1]), -var(edge[1], t, pair[0]));
+                for (int ci = 0; ci < allCults.size(); ci++) {
+                    for (int cj = ci; cj < allCults.size(); cj++) {
+                        Culture ca = allCults.get(ci);
+                        Culture cb = allCults.get(cj);
+                        if (ca.isRepos() || cb.isRepos()) continue;
+                        if (db.getCompatibilite(ca, cb) == TypeAssociation.DEFAVORABLE) {
+                            if (ca.id() == cb.id()) {
+                                addHardBinary(-var(edge[0], t, ca.id()), -var(edge[1], t, ca.id()));
+                            } else {
+                                addHardBinary(-var(edge[0], t, ca.id()), -var(edge[1], t, cb.id()));
+                                addHardBinary(-var(edge[0], t, cb.id()), -var(edge[1], t, ca.id()));
+                            }
+                        }
+                    }
                 }
             }
         }
 
-        // --- 6. C04 : Demande Alimentaire (Souple - Poids 500) ---
-        for (Culture c : db.getAllCultures()) {
+
+        // --- C05 : Budget eau cumulé — addAtMost() PB natif SAT4J (DUR) ---
+        if (!(solver instanceof IPBSolver)) {
+            throw new IllegalStateException("[C05] IPBSolver requis");
+        }
+        IPBSolver pbSolverC05 = (IPBSolver) solver;
+        int[] eauArray = db.getEauParCultureArray();
+        final int CAPACITE_EAU = 500;
+
+        for (int t = 0; t < H; t++) {
+            IVecInt litsEau = new VecInt();
+            IVec<BigInteger> coeffsEau = new Vec<>();
+
+            for (int i = 0; i < N; i++) {
+                if (!topo.isDisponible(i)) continue;
+                for (int c = 1; c <= M; c++) {
+                    int eau = (c < eauArray.length) ? eauArray[c] : 0;
+                    if (eau <= 0) continue;
+                    litsEau.push(var(i, t, c));
+                    coeffsEau.push(BigInteger.valueOf(eau));
+                }
+            }
+            if (litsEau.size() > 0) {
+                pbSolverC05.addAtMost(litsEau, coeffsEau, BigInteger.valueOf(CAPACITE_EAU));
+            }
+        }
+
+        // --- Règle A-bis : Anti-repos consécutif (Lissage occupation sol) ---
+        // Pénalise 2 mois de Repos consécutifs sur la même parcelle — poids 5
+        for (int t = 0; t < H; t++) {
+            int prochainMois = (t + 1) % H;
+            for (int i = 0; i < N; i++) {
+                if (!topo.isDisponible(i)) continue;
+                solver.addSoftClause(5, new VecInt(new int[]{
+                        -var(i, t, 0), -var(i, prochainMois, 0)
+                }));
+            }
+        }
+
+        // --- C08 : Continuité / Étalement des semis (SOUPLE) ---
+        final int SEUIL_FORTE_DEMANDE = 20; // parcelles/an
+
+        for (Culture cult : db.getAllCultures()) {
+            if (cult.isRepos()) continue;
+
+            // Calculer la demande annuelle totale
+            int demandeAnnuelle = 0;
+            for (int t = 0; t < H; t++)
+                demandeAnnuelle += db.getDemande(cult.id(), t);
+
+            // Appliquer C08 uniquement aux cultures à forte demande
+            if (demandeAnnuelle < SEUIL_FORTE_DEMANDE) continue;
+
             for (int t = 0; t < H; t++) {
-                if (db.getDemande(c.id(), t) > 0) {
-                    int[] lits = new int[N];
-                    for (int i = 0; i < N; i++) lits[i] = var(i, t, c.id());
-                    solver.addSoftClause(500, new VecInt(lits));
+                if (!db.isDisponible(cult.id(), t)) continue;
+
+                // Clause OR : culture c présente sur au moins 1 parcelle au mois t
+                int[] litsPresence = new int[N];
+                for (int i = 0; i < N; i++)
+                    litsPresence[i] = var(i, t, cult.id());
+                solver.addSoftClause(8, new VecInt(litsPresence));
+            }
+        }
+
+        // --- 6. C04 : Demande Alimentaire Réelle  ---
+        double facteurTerrain = (N <= 24) ? 0.33 : 1.0;
+
+        for (Culture c : db.getAllCultures()) {
+            if (c.isRepos()) continue;
+
+            for (int t = 0; t < H; t++) {
+                int demandeExcel = db.getDemande(c.id(), t);
+                int quotaDemande = (int) Math.ceil(demandeExcel * facteurTerrain);
+                if (demandeExcel > 0 && quotaDemande == 0) quotaDemande = 1;
+
+                if (quotaDemande <= 0 || !db.isDisponible(c.id(), t)) continue;
+
+                int tailleGroupe = Math.max(1, N / quotaDemande);
+                for (int grp = 0; grp < quotaDemande; grp++) {
+                    int debut = grp * tailleGroupe;
+                    int fin = (grp == quotaDemande - 1) ? N : Math.min(N, debut + tailleGroupe);
+                    int nb = fin - debut;
+                    if (nb <= 0) continue;
+
+
+                    int[] lits = new int[nb];
+                    for (int j = 0; j < nb; j++) {
+                        lits[j] = var(debut + j, t, c.id());
+                    }
+                    solver.addSoftClause(300, new VecInt(lits));
                 }
             }
         }
 
-        // --- 7. C07 : Associations Favorables (Souple - Poids 1) ---
+
+
+        // --- C09 : Diversité des cultures (SOUPLE) ---
+        for (Culture cult : db.getAllCultures()) {
+            if (cult.isRepos()) continue;
+            for (int t = 0; t < H; t++) {
+                for (int[] edge : topo.getEdges()) {
+                    solver.addSoftClause(5, new VecInt(new int[]{
+                            -var(edge[0], t, cult.id()),
+                            -var(edge[1], t, cult.id())
+                    }));
+                }
+            }
+        }
+
+        // --- C10 : Précédents favorables / Bonnes successions (SOUPLE) ---
+        String[][] bonnesSuivantes = {
+                // {culture_precedente, culture_suivante}
+                {"Tomate",          "Haricot"},
+                {"Tomate",          "Oignon"},
+                {"Tomate",          "Carotte"},
+                {"Tomate",          "Salade / Laitue"},
+                {"Tomate",          "Chou"},
+                {"Oignon",          "Tomate"},
+                {"Oignon",          "Chou"},
+                {"Oignon",          "Carotte"},
+                {"Chou",            "Haricot"},
+                {"Chou",            "Carotte"},
+                {"Chou",            "Oignon"},
+                {"Aubergine",       "Haricot"},
+                {"Aubergine",       "Oignon"},
+                {"Carotte",         "Tomate"},
+                {"Carotte",         "Haricot"},
+                {"Carotte",         "Oignon"},
+                {"Concombre",       "Haricot"},
+                {"Concombre",       "Oignon"},
+                {"Haricot",         "Tomate"},
+                {"Haricot",         "Chou"},
+                {"Haricot",         "Aubergine"},
+                {"Betterave",       "Oignon"},
+                {"Betterave",       "Haricot"},
+                {"Patate douce",    "Haricot"},
+                {"Patate douce",    "Oignon"},
+                {"Manioc",          "Haricot"},
+                {"Manioc",          "Gombo"},
+                {"Pomme de terre",  "Haricot"},
+                {"Pomme de terre",  "Carotte"},
+        };
+
+        for (String[] paire : bonnesSuivantes) {
+            Culture cPrev = db.getCultureByName(paire[0]);
+            Culture cNext = db.getCultureByName(paire[1]);
+            if (cPrev == null || cNext == null) continue;
+            for (int i = 0; i < N; i++) {
+                if (!topo.isDisponible(i)) continue;
+                for (int t = 0; t < H - 1; t++) {
+                    solver.addSoftClause(20, new VecInt(new int[]{
+                            -var(i, t, cPrev.id()),
+                            var(i, t + 1, cNext.id())
+                    }));
+                }
+            }
+        }
+
+        // --- 7. C07 : Associations Favorables (SOUPLE) ---
         List<int[]> favPairs = db.getFavorablePairs();
         for (int t = 0; t < H; t++) {
             for (int[] edge : topo.getEdges()) {
                 for (int[] fav : favPairs) {
-                    addSoft(var(edge[0], t, fav[0]), 1);
-                    addSoft(var(edge[1], t, fav[1]), 1);
+                    addSoft(new int[]{-var(edge[0], t, fav[0]), var(edge[1], t, fav[1])}, 15);
+                    addSoft(new int[]{-var(edge[0], t, fav[1]), var(edge[1], t, fav[0])}, 15);
                 }
             }
         }
 
-        // --- 8. Gestion de l'Eau (Budget hydraulique) ---
-        encodeWaterConstraint();
-    }
-
-    private void encodeWaterConstraint() throws ContradictionException {
-        int capacityMax = 500; // Capacité max en Litres/jour
-        int[] waterNeeds = db.getEauParCultureArray();
-
-        for (int t = 0; t < H; t++) {
-            VecInt literals = new VecInt();
-            VecInt coefficients = new VecInt();
-
-            for (int i = 0; i < N; i++) {
-                for (int c = 1; c <= M; c++) {
-                    if (waterNeeds[c] > 0) {
-                        literals.push(var(i, t, c));
-                        coefficients.push(waterNeeds[c]);
-                    }
-                }
-            }
-
-            if (literals.size() > 0) {
-                // Utilisation de la signature standard de SAT4J pour les poids entiers
-                // false signifie "inférieur ou égal" (<=)
-                solver.addWeightConstraint(literals, coefficients, false, capacityMax);
+        // --- 8. C10 : Anti-Repos / Maximisation de la Production (SOUPLE) ---
+        for (int i = 0; i < N; i++) {
+            if (!topo.isDisponible(i)) continue;
+            for (int t = 0; t < H; t++) {
+                int reposLit = var(i, t, 0);
+                solver.addSoftClause(60, new VecInt(new int[]{-reposLit}));
             }
         }
     }
+
+
 
     private void encodeExactlyOne(int i, int t) throws ContradictionException {
         int[] lits = new int[M + 1];
         for (int c = 0; c <= M; c++) lits[c] = var(i, t, c);
         solver.addHardClause(new VecInt(lits));
+
         int n = lits.length;
         int[] aux = new int[n - 1];
         for (int k = 0; k < n - 1; k++) aux[k] = nextAuxVar++;
@@ -226,8 +419,8 @@ public class SAT4JModel {
         solver.addHardClause(new VecInt(new int[]{lit1, lit2}));
     }
 
-    private void addSoft(int lit, int weight) throws ContradictionException {
-        solver.addSoftClause(weight, new VecInt(new int[]{lit}));
+    private void addSoft(int[] lits, int weight) throws ContradictionException {
+        solver.addSoftClause(weight, new VecInt(lits));
     }
 
     private int computeScore(int[][] plan) {
