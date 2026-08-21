@@ -278,18 +278,56 @@ public class ChocoModel {
     private IntVar[] getColumn(int t){IntVar[] c=new IntVar[N];for(int i=0;i<N;i++)c[i]=X[i][t];return c;}
     private IntVar[] flatten(){IntVar[] f=new IntVar[N*H];int k=0;for(int i=0;i<N;i++)for(int t=0;t<H;t++)f[k++]=X[i][t];return f;}
 
+    // Calcul du C04 réel pour un plan donné (même logique que Main.calculerC04)
+    private int[] computeC04(int[][] plan) {
+        int totalGroupes = 0, satisfaits = 0;
+        for (Culture cult : db.getAllCultures()) {
+            if (cult.isRepos() || cult.id() <= 0) continue;
+            for (int t = 0; t < H; t++) {
+                int dem = db.getDemande(cult.id(), t);
+                if (dem <= 0 || !db.isDisponible(cult.id(), t)) continue;
+                int plantees = 0;
+                for (int i = 0; i < N; i++) if (plan[i][t] == cult.id()) plantees++;
+                totalGroupes += dem;
+                satisfaits   += Math.min(plantees, dem);
+            }
+        }
+        return new int[]{satisfaits, totalGroupes};
+    }
+
     public SolveResult solve(int timeoutSec) {
         Solver solver=model.getSolver();
+        solver.limitNode(30000);
         solver.limitTime(timeoutSec+"s");
         solver.setSearch(Search.intVarSearch(new FirstFail(model),new IntDomainRandom(seed),flatten()));
-        int[][] best=null; double time=0; int bestScore=Integer.MIN_VALUE;
+
+        int[][] last=null; double lastTime=0; int lastScore=Integer.MIN_VALUE;
+        int[][] bestByC04=null; double bestC04Time=0; int bestC04Score=Integer.MIN_VALUE; int bestC04Sat=-1;
+
         while (solver.solve()) {
-            best=new int[N][H]; for(int i=0;i<N;i++)for(int t=0;t<H;t++) best[i][t]=X[i][t].getValue();
-            time=solver.getTimeCount()*1000; bestScore=(int)solver.getBestSolutionValue();
-            System.out.println("  [CP] ✓ Score="+bestScore+" t="+String.format("%.1f",time/1000)+"s");
+            last=new int[N][H];
+            for(int i=0;i<N;i++)for(int t=0;t<H;t++) last[i][t]=X[i][t].getValue();
+            lastTime=solver.getTimeCount()*1000; lastScore=(int)solver.getBestSolutionValue();
+
+            int[] c04 = computeC04(last);
+            System.out.println("  [CP] ✓ Score="+lastScore+" t="+String.format("%.1f",lastTime/1000)+"s"
+                    +"  C04="+c04[0]+"/"+c04[1]+" ("+String.format("%.1f",100.0*c04[0]/c04[1])+"%)");
+
+            if (c04[0] > bestC04Sat) {
+                bestC04Sat = c04[0];
+                bestByC04 = last;
+                bestC04Time = lastTime;
+                bestC04Score = lastScore;
+            }
         }
         System.out.println("  [CP] Fin. Backtracks="+solver.getBackTrackCount()+" Noeuds="+solver.getNodeCount());
-        return best!=null?new SolveResult(best,time,"SAT",bestScore):new SolveResult(null,0,"UNSAT",Integer.MIN_VALUE);
+
+        if (bestByC04 != null) {
+            System.out.println("  [CP] Solution retenue : meilleure en C04 (score composite="+bestC04Score
+                    +", t="+String.format("%.1f",bestC04Time/1000)+"s), pas forcément la dernière trouvée.");
+            return new SolveResult(bestByC04, bestC04Time, "SAT", bestC04Score);
+        }
+        return last!=null?new SolveResult(last,lastTime,"SAT",lastScore):new SolveResult(null,0,"UNSAT",Integer.MIN_VALUE);
     }
     public record SolveResult(int[][] plan,double timeMs,String status,int score){}
 }

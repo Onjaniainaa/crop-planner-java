@@ -96,8 +96,8 @@ public class Main {
         System.out.println("\n[P3] Initialisation Choco-CP...");
         ChocoModel model = new ChocoModel(db, topo, nbPeriodes, 42L);
 
-        System.out.println("[P4] Résolution CP (timeout 120s)...");
-        ChocoModel.SolveResult result = model.solve(120);
+        System.out.println("[P4] Résolution CP (limite : 30 000 nœuds, garde-fou 600s)...");
+        ChocoModel.SolveResult result = model.solve(600);
 
         if (result.plan() != null) {
             System.out.println("✅ SOLUTION CP TROUVÉE !");
