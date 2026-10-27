@@ -209,7 +209,7 @@ Pour utiliser le projet, il faut notamment disposer de :
 Clonez le dépôt GitHub :
 
 ```bash
-git clone <URL_DU_DEPOT>
+git clone <https://github.com/Onjaniainaa/crop-planner-java.git>
 ```
 
 Puis ouvrez le projet dans IntelliJ IDEA.
